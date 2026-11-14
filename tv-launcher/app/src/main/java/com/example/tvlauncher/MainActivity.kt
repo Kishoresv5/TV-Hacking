@@ -4,6 +4,7 @@ import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ResolveInfo
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Typeface
@@ -57,7 +58,7 @@ class MainActivity : Activity() {
         const val FALLBACK_LON = 77.7993
         const val FALLBACK_CITY = "Sivakasi"
         const val USE_IP_LOCATION = true
-        const val GRID_COLUMNS = 8
+        const val GRID_COLUMNS = 5
 
         // Apps shown on the top row, in this order.
         val PINS = listOf(
@@ -81,7 +82,6 @@ class MainActivity : Activity() {
     private lateinit var dateView: TextView
     private lateinit var tempView: TextView
     private lateinit var descView: TextView
-    private lateinit var pinRow: LinearLayout
     private lateinit var grid: RecyclerView
 
     private var curTop = 0
@@ -131,7 +131,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         grid.scrollToPosition(0)
-        pinRow.getChildAt(0)?.requestFocus()
+        focusFirst()
     }
 
     // Launcher should never close on Back.
@@ -192,16 +192,6 @@ class MainActivity : Activity() {
         header.addView(right, LinearLayout.LayoutParams(-2, -2))
         col.addView(header, LinearLayout.LayoutParams(-1, -2))
 
-        // Favorites row
-        pinRow = LinearLayout(this)
-        pinRow.orientation = LinearLayout.HORIZONTAL
-        pinRow.clipChildren = false
-        pinRow.clipToPadding = false
-        pinRow.setPadding(px(0.8f), px(0.8f), px(0.8f), px(0.8f))
-        val pinLp = LinearLayout.LayoutParams(-1, -2)
-        pinLp.topMargin = px(2.5f)
-        col.addView(pinRow, pinLp)
-
         // All other apps
         grid = RecyclerView(this)
         grid.layoutManager = GridLayoutManager(this, GRID_COLUMNS)
@@ -209,7 +199,7 @@ class MainActivity : Activity() {
         grid.clipToPadding = false
         grid.setPadding(px(0.5f), px(1f), px(0.5f), px(2f))
         val gridLp = LinearLayout.LayoutParams(-1, 0, 1f)
-        gridLp.topMargin = px(1.5f)
+        gridLp.topMargin = px(2.5f)
         col.addView(grid, gridLp)
 
         updateClock()
@@ -234,7 +224,7 @@ class MainActivity : Activity() {
         cell.isClickable = true
         label?.alpha = 0.7f
         cell.setOnFocusChangeListener { v, f ->
-            val s = if (f) 1.1f else 1f
+            val s = if (f) 1.08f else 1f
             v.animate().scaleX(s).scaleY(s).setDuration(160).start()
             v.translationZ = if (f) 20f else 0f
             label?.alpha = if (f) 1f else 0.7f
@@ -250,29 +240,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun buildPinned(item: AppItem): View {
-        val w = px(17f)
-        val h = px(9.6f)
-        val r = px(0.9f).toFloat()
-        val (box, img) = makeBox(w, h, r)
-        val banner = item.banner
-        if (banner != null) {
-            img.scaleType = ImageView.ScaleType.CENTER_CROP
-            img.setImageDrawable(banner)
-        } else {
-            img.scaleType = ImageView.ScaleType.FIT_CENTER
-            img.setPadding(px(2f), px(2f), px(2f), px(2f))
-            img.setImageDrawable(item.icon)
-        }
-        val lp = LinearLayout.LayoutParams(w, h)
-        lp.rightMargin = px(2f)
-        box.layoutParams = lp
-        focusFx(box, box, r, null)
-        box.setOnClickListener { launch(item) }
-        box.setOnLongClickListener { openInfo(item); true }
-        return box
-    }
-
     private inner class Adapter(private val items: List<AppItem>) : RecyclerView.Adapter<Holder>() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
             val ctx = this@MainActivity
@@ -281,12 +248,9 @@ class MainActivity : Activity() {
             cell.gravity = Gravity.CENTER_HORIZONTAL
             cell.setPadding(px(0.5f), px(0.8f), px(0.5f), px(0.8f))
             cell.layoutParams = RecyclerView.LayoutParams(-1, -2)
-            val s = px(8f)
-            val r = px(1.2f).toFloat()
-            val (box, img) = makeBox(s, s, r)
-            img.scaleType = ImageView.ScaleType.FIT_CENTER
-            img.setPadding(px(0.6f), px(0.6f), px(0.6f), px(0.6f))
-            cell.addView(box, LinearLayout.LayoutParams(s, s))
+            val r = px(0.9f).toFloat()
+            val (box, img) = makeBox(px(16f), px(9f), r)
+            cell.addView(box, LinearLayout.LayoutParams(px(16f), px(9f)))
             val tv = label(1.35f, 0.7f)
             tv.gravity = Gravity.CENTER
             tv.maxLines = 1
@@ -300,7 +264,16 @@ class MainActivity : Activity() {
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val item = items[position]
-            holder.img.setImageDrawable(item.icon)
+            val banner = item.banner
+            if (banner != null) {
+                holder.img.scaleType = ImageView.ScaleType.CENTER_CROP
+                holder.img.setPadding(0, 0, 0, 0)
+                holder.img.setImageDrawable(banner)
+            } else {
+                holder.img.scaleType = ImageView.ScaleType.FIT_CENTER
+                holder.img.setPadding(px(2f), px(1.2f), px(2f), px(1.2f))
+                holder.img.setImageDrawable(item.icon)
+            }
             holder.label.text = item.label
             holder.cell.setOnClickListener { launch(item) }
             holder.cell.setOnLongClickListener { openInfo(item); true }
@@ -313,37 +286,44 @@ class MainActivity : Activity() {
 
     private fun refreshApps() {
         io.execute {
-            val all = loadApps()
-            val sig = all.joinToString("|") { it.pkg }
-            main.post {
-                if (sig != lastSig) {
+            val ris = queryApps()
+            val sig = ris.joinToString("|") { it.activityInfo.packageName }
+            if (sig != lastSig) {
+                val items = ris.map { toItem(it) }
+                val ordered = order(items)
+                main.post {
                     lastSig = sig
-                    val split = splitPinned(all)
-                    showApps(split.first, split.second)
+                    showApps(ordered)
                 }
             }
         }
     }
 
-    private fun loadApps(): List<AppItem> {
+    private fun queryApps(): List<ResolveInfo> {
         val pm = packageManager
-        val map = LinkedHashMap<String, AppItem>()
+        val map = LinkedHashMap<String, ResolveInfo>()
         val cats = listOf(Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER)
         for (cat in cats) {
             val i = Intent(Intent.ACTION_MAIN).addCategory(cat)
             for (ri in pm.queryIntentActivities(i, 0)) {
                 val ai = ri.activityInfo ?: continue
                 if (ai.packageName == packageName || map.containsKey(ai.packageName)) continue
-                val label = ri.loadLabel(pm).toString()
-                val icon = try { ri.loadIcon(pm) } catch (e: Exception) { null }
-                val banner = try { ai.loadBanner(pm) } catch (e: Exception) { null }
-                map[ai.packageName] = AppItem(label, ai.packageName, ai.name, icon, banner)
+                map[ai.packageName] = ri
             }
         }
         return map.values.toList()
     }
 
-    private fun splitPinned(all: List<AppItem>): Pair<List<AppItem>, List<AppItem>> {
+    private fun toItem(ri: ResolveInfo): AppItem {
+        val pm = packageManager
+        val ai = ri.activityInfo
+        val icon = try { ri.loadIcon(pm) } catch (e: Exception) { null }
+        val banner = try { ai.loadBanner(pm) } catch (e: Exception) { null }
+        return AppItem(ri.loadLabel(pm).toString(), ai.packageName, ai.name, icon, banner)
+    }
+
+    // Favorites first (in PINS order), then everything else A-Z.
+    private fun order(all: List<AppItem>): List<AppItem> {
         val top = ArrayList<AppItem>()
         for (p in PINS) {
             val m = p.pkgs.firstNotNullOfOrNull { pk -> all.firstOrNull { it.pkg == pk } }
@@ -351,17 +331,16 @@ class MainActivity : Activity() {
             if (m != null && m !in top) top.add(m)
         }
         val rest = all.filter { it !in top }.sortedBy { it.label.lowercase() }
-        return Pair(top, rest)
+        return top + rest
     }
 
-    private fun showApps(top: List<AppItem>, rest: List<AppItem>) {
-        pinRow.removeAllViews()
-        for (t in top) pinRow.addView(buildPinned(t))
-        pinRow.visibility = if (top.isEmpty()) View.GONE else View.VISIBLE
-        grid.adapter = Adapter(rest)
-        if (root.findFocus() == null) {
-            (pinRow.getChildAt(0) ?: grid).requestFocus()
-        }
+    private fun showApps(list: List<AppItem>) {
+        grid.adapter = Adapter(list)
+        if (root.findFocus() == null) focusFirst()
+    }
+
+    private fun focusFirst() {
+        grid.post { grid.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus() }
     }
 
     private fun launch(item: AppItem) {
@@ -369,6 +348,7 @@ class MainActivity : Activity() {
             val i = Intent(Intent.ACTION_MAIN).setClassName(item.pkg, item.cls)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             startActivity(i)
+            overridePendingTransition(0, 0)
         } catch (e: Exception) {
             Toast.makeText(this, "Can't open ${item.label}", Toast.LENGTH_SHORT).show()
         }
